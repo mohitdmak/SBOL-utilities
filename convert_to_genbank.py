@@ -1,18 +1,18 @@
+import argparse
+import logging
+import sys
+
+import rdflib
+
 import sbol2
 import sbol3
 import tyto
+
 
 FILENAME = 'iGEM_round_1_order_constructs_full_sequences.json'
 OUTPUT_SBOL = 'iGEM_round_1_order_constructs_full_sequences_sbol2.xml'
 OUTPUT_GENBANK = 'iGEM_round_1_order_constructs_full_sequences.gb'
 OUTPUT_FASTA = 'iGEM_round_1_order_constructs_full_sequences.fasta'
-
-###############################################################
-# Load the SBOL3 document
-
-print('Reading SBOL3 document')
-input_doc = sbol3.Document()
-input_doc.read(FILENAME,'json-ld')
 
 ###############################################################
 # Converter routines
@@ -95,48 +95,83 @@ def convert_component_and_dependencies(target, c):
     # Just going to ignore the rest of the material for now
     return cnew
 
-###############################################################
-# Add plasmid information to the description of all inserts
-# add plasmid information for all of the non-serializable
-
-print("Adding backbone information to insert constructs")
-
-plasmid = tyto.SO.get_uri_by_term('plasmid')
-
 # kludge: it's a plasmid if either it or its direct subcomponent is
 def component_is_circular_plasmid_with_inserts(component):
+    plasmid = tyto.SO.get_uri_by_term('plasmid')
     return isinstance(component, sbol3.Component) and \
            any(f for f in component.features if (isinstance(f,sbol3.SubComponent) and plasmid in f.instance_of.lookup().roles))
 
-plasmids = {c for c in input_doc.objects if component_is_circular_plasmid_with_inserts(c)}
-for p in plasmids:
-    backbone = {f for f in p.features if (isinstance(f,sbol3.SubComponent) and plasmid in f.instance_of.lookup().roles)}
-    assert len(backbone)==1, 'Only know how to convert plasmid constructs with precisely one plasmid feature: '+p.identity
-    backbone = backbone.pop() # get the backbone from the set
-    for c in (f for f in p.features if isinstance(f,sbol3.SubComponent)):
-        #insert_description = "; Vector: "+backbone.instance_of.lookup().display_id
-        #c.instance_of.lookup().description = c.instance_of.lookup().display_id + insert_description + ("; "+c.instance_of.lookup().description if c.instance_of.lookup().description else '')
-        # Looks like for setting up Twist orders we'll need to use just the UID, since names have to be <32 characters on Twist; kludging for now
-        c.instance_of.lookup().description = c.instance_of.lookup().display_id
+
+def parse_args(args=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('infile', metavar='SBOL3_INPUT')
+    parser.add_argument('-d', '--debug', action='store_true')
+    args = parser.parse_args(args)
+    return args
+
+
+def init_logging(debug=False):
+    msg_format = '%(asctime)s %(levelname)s %(message)s'
+    date_format = '%m/%d/%Y %H:%M:%S'
+    level = logging.INFO
+    if debug:
+        level = logging.DEBUG
+    logging.basicConfig(format=msg_format, datefmt=date_format, level=level)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    init_logging(args.debug)
+
+
+    ###############################################################
+    # Load the SBOL3 document
+
+    print('Reading SBOL3 document')
+    input_doc = sbol3.Document()
+    input_doc.read(args.infile, rdflib.util.guess_format(args.infile))
+
+    ###############################################################
+    # Add plasmid information to the description of all inserts
+    # add plasmid information for all of the non-serializable
+
+    print("Adding backbone information to insert constructs")
+
+    plasmid = tyto.SO.get_uri_by_term('plasmid')
+
+    plasmids = {c for c in input_doc.objects if component_is_circular_plasmid_with_inserts(c)}
+    for p in plasmids:
+        backbone = {f for f in p.features if (isinstance(f,sbol3.SubComponent) and plasmid in f.instance_of.lookup().roles)}
+        assert len(backbone)==1, 'Only know how to convert plasmid constructs with precisely one plasmid feature: '+p.identity
+        backbone = backbone.pop() # get the backbone from the set
+        for c in (f for f in p.features if isinstance(f,sbol3.SubComponent)):
+            #insert_description = "; Vector: "+backbone.instance_of.lookup().display_id
+            #c.instance_of.lookup().description = c.instance_of.lookup().display_id + insert_description + ("; "+c.instance_of.lookup().description if c.instance_of.lookup().description else '')
+            # Looks like for setting up Twist orders we'll need to use just the UID, since names have to be <32 characters on Twist; kludging for now
+            c.instance_of.lookup().description = c.instance_of.lookup().display_id
 
 
 
-###############################################################
-# Run the converter on all top-levels in the SBOL2 document
+    ###############################################################
+    # Run the converter on all top-levels in the SBOL2 document
 
-print('Converting to SBOL 2')
-output_doc = sbol2.Document()
-sbol2.setHomespace('')
-sbol2.Config.setOption('sbol_typed_uris', False)
-serializable = (c for c in input_doc.objects if isinstance(c,sbol3.Component) and c.sequences)
-for toplevel in serializable:
-    convert_toplevel_and_dependencies(output_doc, toplevel)
+    print('Converting to SBOL 2')
+    output_doc = sbol2.Document()
+    sbol2.setHomespace('')
+    sbol2.Config.setOption('sbol_typed_uris', False)
+    serializable = (c for c in input_doc.objects if isinstance(c,sbol3.Component) and c.sequences)
+    for toplevel in serializable:
+        convert_toplevel_and_dependencies(output_doc, toplevel)
 
-report = output_doc.validate()
-print(report)
+    report = output_doc.validate()
+    print(report)
 
-output_doc.write(OUTPUT_SBOL)
-print('SBOL2 file written')
+    output_doc.write(OUTPUT_SBOL)
+    print('SBOL2 file written')
 
-output_doc.exportToFormat('GenBank',OUTPUT_GENBANK)
-print('GenBank file written')
+    output_doc.exportToFormat('GenBank',OUTPUT_GENBANK)
+    print('GenBank file written')
+
+
+if __name__ == '__main__':
+    main()
